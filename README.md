@@ -21,8 +21,8 @@
 ### 从源码构建
 
 ```bash
-git clone https://github.com/yourusername/dedup-cli.git
-cd dedup-cli
+git clone https://github.com/vxzman/deduper.git
+cd deduper
 go mod tidy
 
 # Linux/macOS
