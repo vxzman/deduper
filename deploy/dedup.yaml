@@ -1,0 +1,16 @@
+# UNAS 每周去重扫描配置
+database: /var/lib/dedup/dedup.db
+hash: blake3
+workers: 0
+min_size: 1
+roots:
+  - /media/share
+exclude:
+  - "*.tmp"
+  - "*.part"
+  - "#recycle"
+  - "$RECYCLE.BIN"
+  - "System Volume Information"
+  - "@eaDir"
+  - "Thumbs.db"
+  - ".DS_Store"

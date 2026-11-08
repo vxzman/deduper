@@ -1,0 +1,11 @@
+[Unit]
+Description=dedup scan /media/share
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dedup scan --config /etc/dedup/dedup.yaml
+StateDirectory=dedup
+StateDirectoryMode=0750
+Nice=10
+IOSchedulingClass=idle

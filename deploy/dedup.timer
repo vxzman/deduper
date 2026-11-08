@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly dedup scan for /media/share
+
+[Timer]
+OnCalendar=Mon *-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target
