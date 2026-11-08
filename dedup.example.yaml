@@ -1,0 +1,26 @@
+# dedup 示例配置
+# 用法: dedup scan --config dedup.yaml
+
+# bbolt 数据库，同时保存哈希缓存与扫描结果
+database: /var/lib/dedup/dedup.db
+
+# 哈希算法: blake3 | sha256 | sha3
+hash: blake3
+
+# 并发数，0 表示使用 CPU 核心数
+workers: 4
+
+# 小于该字节数的文件不参与去重
+min_size: 1
+
+# 要扫描的目录，重复文件会在所有目录之间统一比对
+roots:
+  - /volume1/photos
+  - /volume1/backup
+
+# 排除规则（glob），同时匹配完整路径与文件名
+exclude:
+  - "*.tmp"
+  - "#recycle"
+  - "@eaDir"
+  - "Thumbs.db"

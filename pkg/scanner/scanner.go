@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
-
-	"golang.org/x/sync/errgroup"
 )
 
 // FileInfo 文件信息结构
@@ -18,21 +16,73 @@ type FileInfo struct {
 
 // Scanner 文件扫描器
 type Scanner struct {
-	workers int            // 并发工作协程数
-	quiet   bool           // 静默模式
-	files   []FileInfo     // 扫描结果
-	mu      sync.Mutex     // 保护 files 切片的互斥锁
+	workers  int        // 并发工作协程数
+	quiet    bool       // 静默模式
+	excludes []string   // 排除规则（glob）
+	files    []FileInfo // 扫描结果
+	mu       sync.Mutex // 保护 files 切片的互斥锁
+}
+
+// dirQueue 无界目录队列，使用条件变量协调待处理目录数
+type dirQueue struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	items   []string
+	pending int // 已入队但尚未处理完成的目录数
+}
+
+func newDirQueue() *dirQueue {
+	q := &dirQueue{}
+	q.cond = sync.NewCond(&q.mu)
+	return q
+}
+
+// push 将一个目录加入队列
+func (q *dirQueue) push(dir string) {
+	q.mu.Lock()
+	q.items = append(q.items, dir)
+	q.pending++
+	q.mu.Unlock()
+	q.cond.Signal()
+}
+
+// pop 取出一个目录；队列为空且无待处理目录时返回 false
+func (q *dirQueue) pop() (string, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for len(q.items) == 0 {
+		if q.pending == 0 {
+			return "", false
+		}
+		q.cond.Wait()
+	}
+
+	dir := q.items[0]
+	q.items = q.items[1:]
+	return dir, true
+}
+
+// done 标记一个目录已处理完成
+func (q *dirQueue) done() {
+	q.mu.Lock()
+	q.pending--
+	if q.pending == 0 {
+		q.cond.Broadcast()
+	}
+	q.mu.Unlock()
 }
 
 // NewScanner 创建新的扫描器
-func NewScanner(workers int, quiet bool) *Scanner {
+func NewScanner(workers int, quiet bool, excludes []string) *Scanner {
 	if workers <= 0 {
 		workers = runtime.NumCPU()
 	}
 	return &Scanner{
-		workers: workers,
-		quiet:   quiet,
-		files:   make([]FileInfo, 0),
+		workers:  workers,
+		quiet:    quiet,
+		excludes: excludes,
+		files:    make([]FileInfo, 0),
 	}
 }
 
@@ -75,30 +125,34 @@ func (s *Scanner) Scan(root string) ([]FileInfo, error) {
 
 // scanDirConcurrent 并发扫描目录
 func (s *Scanner) scanDirConcurrent(root string) error {
-	var eg errgroup.Group
-	dirChan := make(chan string, s.workers)
+	queue := newDirQueue()
+	var wg sync.WaitGroup
 
 	// 启动工作协程处理目录
 	for i := 0; i < s.workers; i++ {
-		eg.Go(func() error {
-			for dir := range dirChan {
-				if err := s.processDir(dir, dirChan); err != nil {
-					return err
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				dir, ok := queue.pop()
+				if !ok {
+					return
 				}
+				s.processDir(dir, queue.push)
+				queue.done()
 			}
-			return nil
-		})
+		}()
 	}
 
 	// 发送根目录
-	dirChan <- root
-	close(dirChan)
+	queue.push(root)
+	wg.Wait()
 
-	return eg.Wait()
+	return nil
 }
 
 // processDir 处理单个目录
-func (s *Scanner) processDir(dir string, dirChan chan<- string) error {
+func (s *Scanner) processDir(dir string, push func(string)) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !s.quiet {
@@ -110,16 +164,14 @@ func (s *Scanner) processDir(dir string, dirChan chan<- string) error {
 	for _, entry := range entries {
 		path := filepath.Join(dir, entry.Name())
 
+		// 命中排除规则的目录/文件直接跳过
+		if s.isExcluded(path) {
+			continue
+		}
+
 		if entry.IsDir() {
-			// 将子目录发送到队列进行并发处理
-			select {
-			case dirChan <- path:
-			default:
-				// 如果队列已满，直接处理
-				if err := s.processDir(path, dirChan); err != nil {
-					return err
-				}
-			}
+			// 将子目录加入队列进行并发处理
+			push(path)
 			continue
 		}
 
@@ -158,6 +210,23 @@ func (s *Scanner) processDir(dir string, dirChan chan<- string) error {
 	}
 
 	return nil
+}
+
+// isExcluded 判断路径是否命中排除规则（同时匹配完整路径和文件名）。
+func (s *Scanner) isExcluded(path string) bool {
+	if len(s.excludes) == 0 {
+		return false
+	}
+	base := filepath.Base(path)
+	for _, pattern := range s.excludes {
+		if matched, _ := filepath.Match(pattern, path); matched {
+			return true
+		}
+		if matched, _ := filepath.Match(pattern, base); matched {
+			return true
+		}
+	}
+	return false
 }
 
 // GetFiles 获取扫描结果

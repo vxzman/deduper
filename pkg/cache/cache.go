@@ -7,34 +7,56 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
 
+const (
+	bucketMetadata = "metadata"
+	bucketIndices  = "indices"
+	bucketEntries  = "entries"
+	bucketResults  = "results"
+)
+
 // CacheEntry 缓存条目
 type CacheEntry struct {
-	FilePath string `json:"path"`
-	Hash     string `json:"hash"`
-	FileSize int64  `json:"size"`
-	Modified int64  `json:"mtime"`  // Unix timestamp
-	CachedAt int64  `json:"cached"` // Unix timestamp
+	FilePath  string `json:"path"`
+	Hash      string `json:"hash"`
+	Algorithm string `json:"algorithm"`
+	FileSize  int64  `json:"size"`
+	Modified  int64  `json:"mtime"`  // Unix timestamp
+	CachedAt  int64  `json:"cached"` // Unix timestamp
+}
+
+// DuplicateGroup 一组内容完全相同的文件。
+type DuplicateGroup struct {
+	Hash      string   `json:"hash"`
+	Algorithm string   `json:"algorithm"`
+	Size      int64    `json:"size"`
+	Files     []string `json:"files"`
+}
+
+// ID 返回重复组的稳定存储键。
+func (g DuplicateGroup) ID() string {
+	return g.Algorithm + ":" + g.Hash
 }
 
 // CacheManager 缓存管理器
 type CacheManager struct {
-	db          *bolt.DB
-	cachePath   string
-	Enabled     bool
-	Quiet       bool
-	mutex       sync.RWMutex
-	writeChan   chan *CacheEntry
-	writeDone   chan struct{}
-	writeTicker *time.Ticker
-	writeMu     sync.Mutex
-	pending     []*CacheEntry
-	batchSize   int
+	db            *bolt.DB
+	cachePath     string
+	Enabled       bool
+	Quiet         bool
+	mutex         sync.RWMutex
+	writeChan     chan *CacheEntry
+	writeDone     chan struct{}
+	writeTicker   *time.Ticker
+	writeMu       sync.Mutex
+	pending       []*CacheEntry
+	batchSize     int
 	flushInterval time.Duration
 }
 
@@ -65,11 +87,10 @@ func NewCacheManager(cacheOption string, quiet bool) (*CacheManager, error) {
 
 	// 初始化 buckets
 	err = db.Update(func(tx *bolt.Tx) error {
-		_, err1 := tx.CreateBucketIfNotExists([]byte("metadata"))
-		_, err2 := tx.CreateBucketIfNotExists([]byte("indices"))
-		_, err3 := tx.CreateBucketIfNotExists([]byte("entries"))
-		if err1 != nil || err2 != nil || err3 != nil {
-			return fmt.Errorf("初始化缓存 buckets 失败")
+		for _, name := range []string{bucketMetadata, bucketIndices, bucketEntries, bucketResults} {
+			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
+				return fmt.Errorf("初始化缓存 buckets 失败：%v", err)
+			}
 		}
 		return nil
 	})
@@ -95,7 +116,7 @@ func NewCacheManager(cacheOption string, quiet bool) (*CacheManager, error) {
 	go cm.writeWorker()
 
 	if !quiet {
-		fmt.Printf("[INFO] 缓存文件：%s\n", cachePath)
+		fmt.Printf("[INFO] 数据库文件：%s\n", cachePath)
 	}
 
 	return cm, nil
@@ -154,12 +175,10 @@ func (cm *CacheManager) flushPending() error {
 			return nil
 		}
 
-		var buffer bytes.Buffer
-		encoder := gob.NewEncoder(&buffer)
-
 		for _, entry := range cm.pending {
-			buffer.Reset()
-			if err := encoder.Encode(entry); err != nil {
+			// 每个条目使用独立的编码器，避免因复用编码器而丢失 gob 类型信息
+			var buffer bytes.Buffer
+			if err := gob.NewEncoder(&buffer).Encode(entry); err != nil {
 				continue
 			}
 			entryBytes := buffer.Bytes()
@@ -175,7 +194,7 @@ func (cm *CacheManager) flushPending() error {
 }
 
 // GetCachedHash 获取缓存的哈希值
-func (cm *CacheManager) GetCachedHash(filepath string) (string, bool) {
+func (cm *CacheManager) GetCachedHash(filepath string, algorithm string) (string, bool) {
 	if !cm.Enabled {
 		return "", false
 	}
@@ -198,6 +217,10 @@ func (cm *CacheManager) GetCachedHash(filepath string) (string, bool) {
 			buffer := bytes.NewBuffer(value)
 			decoder := gob.NewDecoder(buffer)
 			if decoder.Decode(&entry) == nil {
+				// 算法不一致时视为未命中，避免不同算法的哈希混用
+				if entry.Algorithm != algorithm {
+					return nil
+				}
 				// 验证文件是否仍然有效
 				if cm.isFileStillValid(filepath, &entry) {
 					hash = entry.Hash
@@ -216,17 +239,18 @@ func (cm *CacheManager) GetCachedHash(filepath string) (string, bool) {
 }
 
 // CacheHash 缓存哈希值 (异步写入)
-func (cm *CacheManager) CacheHash(filepath, hash string, fileSize int64, modifiedTime time.Time) error {
+func (cm *CacheManager) CacheHash(filepath, hash, algorithm string, fileSize int64, modifiedTime time.Time) error {
 	if !cm.Enabled {
 		return nil
 	}
 
 	entry := &CacheEntry{
-		FilePath: filepath,
-		Hash:     hash,
-		FileSize: fileSize,
-		Modified: modifiedTime.Unix(),
-		CachedAt: time.Now().Unix(),
+		FilePath:  filepath,
+		Hash:      hash,
+		Algorithm: algorithm,
+		FileSize:  fileSize,
+		Modified:  modifiedTime.Unix(),
+		CachedAt:  time.Now().Unix(),
 	}
 
 	// 非阻塞发送到写入队列
@@ -287,16 +311,164 @@ func (cm *CacheManager) ClearCache() error {
 
 	return cm.db.Update(func(tx *bolt.Tx) error {
 		// 删除所有 buckets 并重新创建
-		tx.DeleteBucket([]byte("metadata"))
-		tx.DeleteBucket([]byte("indices"))
-		tx.DeleteBucket([]byte("entries"))
-
-		_, err1 := tx.CreateBucketIfNotExists([]byte("metadata"))
-		_, err2 := tx.CreateBucketIfNotExists([]byte("indices"))
-		_, err3 := tx.CreateBucketIfNotExists([]byte("entries"))
-
-		return fmt.Errorf("%v %v %v", err1, err2, err3)
+		for _, name := range []string{bucketMetadata, bucketIndices, bucketEntries, bucketResults} {
+			if err := tx.DeleteBucket([]byte(name)); err != nil && err != bolt.ErrBucketNotFound {
+				return err
+			}
+			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+// SaveDuplicateGroups 覆盖保存本次扫描得到的重复组结果。
+func (cm *CacheManager) SaveDuplicateGroups(groups []DuplicateGroup, scannedAt time.Time) error {
+	if !cm.Enabled {
+		return fmt.Errorf("存储未启用")
+	}
+
+	// 先把异步哈希缓存落盘，避免与下面的事务交错影响可读性
+	if err := cm.Flush(); err != nil {
+		return err
+	}
+
+	return cm.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.DeleteBucket([]byte(bucketResults)); err != nil && err != bolt.ErrBucketNotFound {
+			return err
+		}
+		results, err := tx.CreateBucketIfNotExists([]byte(bucketResults))
+		if err != nil {
+			return err
+		}
+
+		for _, group := range groups {
+			var buffer bytes.Buffer
+			if err := gob.NewEncoder(&buffer).Encode(group); err != nil {
+				return err
+			}
+			if err := results.Put([]byte(group.ID()), buffer.Bytes()); err != nil {
+				return err
+			}
+		}
+
+		meta, err := tx.CreateBucketIfNotExists([]byte(bucketMetadata))
+		if err != nil {
+			return err
+		}
+		return meta.Put([]byte("last_scan"), []byte(scannedAt.Format(time.RFC3339)))
+	})
+}
+
+// LoadDuplicateGroups 读取已保存的重复组，按文件大小降序、哈希升序排序。
+func (cm *CacheManager) LoadDuplicateGroups() ([]DuplicateGroup, error) {
+	if !cm.Enabled {
+		return nil, fmt.Errorf("存储未启用")
+	}
+
+	var groups []DuplicateGroup
+	err := cm.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketResults))
+		if bucket == nil {
+			return nil
+		}
+		return bucket.ForEach(func(_, value []byte) error {
+			if value == nil {
+				return nil
+			}
+			var group DuplicateGroup
+			if err := gob.NewDecoder(bytes.NewReader(value)).Decode(&group); err != nil {
+				return fmt.Errorf("解码重复组失败：%v", err)
+			}
+			groups = append(groups, group)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].Size != groups[j].Size {
+			return groups[i].Size > groups[j].Size
+		}
+		return groups[i].Hash < groups[j].Hash
+	})
+
+	return groups, nil
+}
+
+// UpdateDuplicateGroup 更新单个重复组；文件数少于 2 时删除该组。
+func (cm *CacheManager) UpdateDuplicateGroup(group DuplicateGroup) error {
+	if !cm.Enabled {
+		return fmt.Errorf("存储未启用")
+	}
+
+	return cm.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketResults))
+		if bucket == nil {
+			return nil
+		}
+		if len(group.Files) < 2 {
+			return bucket.Delete([]byte(group.ID()))
+		}
+
+		var buffer bytes.Buffer
+		if err := gob.NewEncoder(&buffer).Encode(group); err != nil {
+			return err
+		}
+		return bucket.Put([]byte(group.ID()), buffer.Bytes())
+	})
+}
+
+// DeleteHashCache 删除指定路径的哈希缓存索引。
+func (cm *CacheManager) DeleteHashCache(paths []string) error {
+	if !cm.Enabled {
+		return nil
+	}
+
+	return cm.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketIndices))
+		if bucket == nil {
+			return nil
+		}
+		for _, path := range paths {
+			if err := bucket.Delete([]byte(path)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// LastScanTime 返回上次扫描时间。
+func (cm *CacheManager) LastScanTime() (time.Time, bool, error) {
+	if !cm.Enabled {
+		return time.Time{}, false, nil
+	}
+
+	var (
+		scanTime time.Time
+		found    bool
+	)
+	err := cm.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketMetadata))
+		if bucket == nil {
+			return nil
+		}
+		value := bucket.Get([]byte("last_scan"))
+		if value == nil {
+			return nil
+		}
+		parsed, err := time.Parse(time.RFC3339, string(value))
+		if err != nil {
+			return nil
+		}
+		scanTime, found = parsed, true
+		return nil
+	})
+	return scanTime, found, err
 }
 
 // Close 关闭缓存 (确保所有数据写入)
