@@ -12,7 +12,7 @@ import (
 	"dedup/pkg/scanner"
 )
 
-// Stats 描述一次重复检测的统计信息。
+// Stats describes the statistics of one duplicate detection run.
 type Stats struct {
 	TotalFiles      int
 	CandidateFiles  int
@@ -22,7 +22,7 @@ type Stats struct {
 	DuplicateFiles  int
 }
 
-// FindDuplicates 在一组文件里查找内容完全相同的重复组。
+// FindDuplicates finds groups of files with identical content.
 func FindDuplicates(files []scanner.FileInfo, hasher hash.Hasher, workers int, quiet bool, cacheMgr *cache.CacheManager) ([]cache.DuplicateGroup, Stats, []error) {
 	stats := Stats{TotalFiles: len(files)}
 	if len(files) == 0 {
@@ -114,7 +114,7 @@ type hashResult struct {
 	modified time.Time
 }
 
-// computeHashes 并发计算哈希，并把结果异步写入缓存。
+// computeHashes computes hashes concurrently and writes results to the cache.
 func computeHashes(files []scanner.FileInfo, hasher hash.Hasher, workers int, quiet bool, cacheMgr *cache.CacheManager) (map[string]string, []error) {
 	hashMap := make(map[string]string)
 	if len(files) == 0 {
@@ -140,7 +140,7 @@ func computeHashes(files []scanner.FileInfo, hasher hash.Hasher, workers int, qu
 			for job := range jobs {
 				f, err := os.Open(job.path)
 				if err != nil {
-					results <- hashResult{path: job.path, err: fmt.Errorf("无法打开文件：%v", err)}
+					results <- hashResult{path: job.path, err: fmt.Errorf("failed to open file: %v", err)}
 					continue
 				}
 
@@ -152,7 +152,7 @@ func computeHashes(files []scanner.FileInfo, hasher hash.Hasher, workers int, qu
 				hashValue, err := hasher.Sum(f)
 				f.Close()
 				if err != nil {
-					results <- hashResult{path: job.path, err: fmt.Errorf("哈希计算失败：%v", err)}
+					results <- hashResult{path: job.path, err: fmt.Errorf("failed to compute hash: %v", err)}
 					continue
 				}
 

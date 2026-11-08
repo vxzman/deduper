@@ -9,24 +9,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config 声明式去重配置。
+// Config describes a declarative dedup configuration.
 type Config struct {
-	// Database 是 bbolt 数据库路径，同时保存哈希缓存与扫描结果。
+	// Database is the bbolt path used for both the hash cache and scan results.
 	Database string `yaml:"database"`
-	// Hash 是哈希算法：blake3 | sha256 | sha3。
+	// Hash is the hash algorithm: blake3 | sha256 | sha3.
 	Hash string `yaml:"hash"`
-	// Workers 是并发数，0 表示使用 CPU 核心数。
+	// Workers is the concurrency level; 0 means the number of CPU cores.
 	Workers int `yaml:"workers"`
-	// MinSize 是参与去重的最小文件大小（字节），小于该值的文件会被忽略。
+	// MinSize is the minimum file size in bytes to consider.
 	MinSize int64 `yaml:"min_size"`
-	// Roots 是要扫描的目录列表，重复文件会在所有目录之间统一比对。
+	// Roots is the list of directories to scan; duplicates are matched across all roots.
 	Roots []string `yaml:"roots"`
-	// Exclude 是排除规则（glob），同时匹配完整路径与文件名。
+	// Exclude is a list of glob patterns matched against full paths and file names.
 	Exclude []string `yaml:"exclude"`
-	// Quiet 关闭普通日志输出。
+	// Quiet disables normal log output.
 	Quiet bool `yaml:"quiet"`
 
-	// Path 记录配置文件路径，便于诊断。
+	// Path records the config file path for diagnostics.
 	Path string `yaml:"-"`
 }
 
@@ -36,16 +36,16 @@ var validHashes = map[string]bool{
 	"sha3":   true,
 }
 
-// Load 读取并校验配置文件。
+// Load reads and validates the configuration file.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("读取配置文件失败：%v", err)
+		return nil, fmt.Errorf("failed to read config file: %v", err)
 	}
 
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("解析配置文件失败：%v", err)
+		return nil, fmt.Errorf("failed to parse config file: %v", err)
 	}
 
 	absConfig, err := filepath.Abs(path)
@@ -62,7 +62,7 @@ func Load(path string) (*Config, error) {
 		cfg.Database = "dedup.db"
 	}
 	if cfg.Database == "none" {
-		return nil, fmt.Errorf("声明式模式必须配置 database，不能为 none")
+		return nil, fmt.Errorf("database must be configured in declarative mode and cannot be none")
 	}
 
 	cfg.Database = resolvePath(cfg.Database, configDir)
@@ -77,27 +77,27 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Validate 校验配置合法性。
+// Validate checks that the configuration is valid.
 func (c *Config) Validate() error {
 	if len(c.Roots) == 0 {
-		return fmt.Errorf("配置中至少需要一个 roots 目录")
+		return fmt.Errorf("at least one root directory is required")
 	}
 	if !validHashes[c.Hash] {
-		return fmt.Errorf("不支持的哈希算法：%s（可选 blake3|sha256|sha3）", c.Hash)
+		return fmt.Errorf("unsupported hash algorithm: %s (choose blake3|sha256|sha3)", c.Hash)
 	}
 	if c.Workers < 0 {
-		return fmt.Errorf("workers 不能为负数")
+		return fmt.Errorf("workers cannot be negative")
 	}
 	if c.MinSize < 0 {
-		return fmt.Errorf("min_size 不能为负数")
+		return fmt.Errorf("min_size cannot be negative")
 	}
 	if c.Database == "" {
-		return fmt.Errorf("database 不能为空")
+		return fmt.Errorf("database cannot be empty")
 	}
 	return nil
 }
 
-// resolvePath 展开 ~ 并把相对路径解析为相对于 configDir 的绝对路径。
+// resolvePath expands ~ and resolves relative paths against configDir.
 func resolvePath(path, configDir string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {

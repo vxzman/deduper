@@ -76,20 +76,20 @@ func NewCacheManager(cacheOption string, quiet bool) (*CacheManager, error) {
 	// 确保缓存目录存在
 	cacheDir := filepath.Dir(cachePath)
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return nil, fmt.Errorf("创建缓存目录失败：%v", err)
+		return nil, fmt.Errorf("failed to create database directory: %v", err)
 	}
 
 	// 打开或创建数据库
 	db, err := bolt.Open(cachePath, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
-		return nil, fmt.Errorf("打开缓存数据库失败：%v", err)
+		return nil, fmt.Errorf("failed to open database: %v", err)
 	}
 
 	// 初始化 buckets
 	err = db.Update(func(tx *bolt.Tx) error {
 		for _, name := range []string{bucketMetadata, bucketIndices, bucketEntries, bucketResults} {
 			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
-				return fmt.Errorf("初始化缓存 buckets 失败：%v", err)
+				return fmt.Errorf("failed to initialize database buckets: %v", err)
 			}
 		}
 		return nil
@@ -116,7 +116,7 @@ func NewCacheManager(cacheOption string, quiet bool) (*CacheManager, error) {
 	go cm.writeWorker()
 
 	if !quiet {
-		fmt.Printf("[INFO] 数据库文件：%s\n", cachePath)
+		fmt.Printf("[INFO] Database: %s\n", cachePath)
 	}
 
 	return cm, nil
@@ -232,7 +232,7 @@ func (cm *CacheManager) GetCachedHash(filepath string, algorithm string) (string
 	})
 
 	if err != nil && !cm.Quiet {
-		fmt.Printf("[WARN] 读取缓存失败：%v\n", err)
+		fmt.Printf("[WARN] Failed to read cache: %v\n", err)
 	}
 
 	return hash, found
@@ -326,7 +326,7 @@ func (cm *CacheManager) ClearCache() error {
 // SaveDuplicateGroups 覆盖保存本次扫描得到的重复组结果。
 func (cm *CacheManager) SaveDuplicateGroups(groups []DuplicateGroup, scannedAt time.Time) error {
 	if !cm.Enabled {
-		return fmt.Errorf("存储未启用")
+		return fmt.Errorf("storage is disabled")
 	}
 
 	// 先把异步哈希缓存落盘，避免与下面的事务交错影响可读性
@@ -364,7 +364,7 @@ func (cm *CacheManager) SaveDuplicateGroups(groups []DuplicateGroup, scannedAt t
 // LoadDuplicateGroups 读取已保存的重复组，按文件大小降序、哈希升序排序。
 func (cm *CacheManager) LoadDuplicateGroups() ([]DuplicateGroup, error) {
 	if !cm.Enabled {
-		return nil, fmt.Errorf("存储未启用")
+		return nil, fmt.Errorf("storage is disabled")
 	}
 
 	var groups []DuplicateGroup
@@ -379,7 +379,7 @@ func (cm *CacheManager) LoadDuplicateGroups() ([]DuplicateGroup, error) {
 			}
 			var group DuplicateGroup
 			if err := gob.NewDecoder(bytes.NewReader(value)).Decode(&group); err != nil {
-				return fmt.Errorf("解码重复组失败：%v", err)
+				return fmt.Errorf("failed to decode duplicate group: %v", err)
 			}
 			groups = append(groups, group)
 			return nil
@@ -402,7 +402,7 @@ func (cm *CacheManager) LoadDuplicateGroups() ([]DuplicateGroup, error) {
 // UpdateDuplicateGroup 更新单个重复组；文件数少于 2 时删除该组。
 func (cm *CacheManager) UpdateDuplicateGroup(group DuplicateGroup) error {
 	if !cm.Enabled {
-		return fmt.Errorf("存储未启用")
+		return fmt.Errorf("storage is disabled")
 	}
 
 	return cm.db.Update(func(tx *bolt.Tx) error {

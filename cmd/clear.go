@@ -7,13 +7,13 @@ import (
 	"dedup/pkg/config"
 )
 
-// runClear 清除哈希缓存与扫描结果。
+// runClear clears the hash cache and scan results.
 func runClear(cfg *config.Config, store *cache.CacheManager) error {
 	if err := store.ClearCache(); err != nil {
-		return fmt.Errorf("清除失败：%v", err)
+		return fmt.Errorf("failed to clear: %v", err)
 	}
 	if !cfg.Quiet {
-		fmt.Println("[INFO] 已清除哈希缓存与扫描结果")
+		fmt.Println("[INFO] Hash cache and scan results cleared")
 	}
 	return nil
 }

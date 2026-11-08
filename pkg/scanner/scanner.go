@@ -93,31 +93,31 @@ func (s *Scanner) Scan(root string) ([]FileInfo, error) {
 
 	// 检查路径是否存在
 	if _, err := os.Stat(root); os.IsNotExist(err) {
-		return nil, fmt.Errorf("路径不存在：%s", root)
+		return nil, fmt.Errorf("path does not exist: %s", root)
 	}
 
 	// 检查是否为目录
 	info, err := os.Stat(root)
 	if err != nil {
-		return nil, fmt.Errorf("无法访问路径：%s, 错误：%v", root, err)
+		return nil, fmt.Errorf("cannot access path %s: %v", root, err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("路径不是目录：%s", root)
+		return nil, fmt.Errorf("path is not a directory: %s", root)
 	}
 
 	if !s.quiet {
-		fmt.Printf("[INFO] 开始扫描：%s (使用 %d 个协程)\n", root, s.workers)
+		fmt.Printf("[INFO] Scanning: %s (workers=%d)\n", root, s.workers)
 	}
 
 	// 使用并发目录遍历
 	s.files = make([]FileInfo, 0)
 	err = s.scanDirConcurrent(root)
 	if err != nil {
-		return nil, fmt.Errorf("扫描过程中发生错误：%v", err)
+		return nil, fmt.Errorf("error while scanning: %v", err)
 	}
 
 	if !s.quiet {
-		fmt.Printf("[INFO] 扫描完成，发现 %d 个文件\n", len(s.files))
+		fmt.Printf("[INFO] Scan complete: %d files\n", len(s.files))
 	}
 
 	return s.files, nil
@@ -156,7 +156,7 @@ func (s *Scanner) processDir(dir string, push func(string)) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !s.quiet {
-			fmt.Printf("[WARN] 无法读取目录：%s, 错误：%v\n", dir, err)
+			fmt.Printf("[WARN] Cannot read directory %s: %v\n", dir, err)
 		}
 		return nil // 继续扫描其他目录
 	}
@@ -179,7 +179,7 @@ func (s *Scanner) processDir(dir string, push func(string)) error {
 		fileInfo, err := entry.Info()
 		if err != nil {
 			if !s.quiet {
-				fmt.Printf("[WARN] 获取文件信息失败：%s, 错误：%v\n", path, err)
+				fmt.Printf("[WARN] Cannot stat %s: %v\n", path, err)
 			}
 			continue
 		}
@@ -187,7 +187,7 @@ func (s *Scanner) processDir(dir string, push func(string)) error {
 		// 跳过符号链接
 		if fileInfo.Mode()&os.ModeSymlink != 0 {
 			if !s.quiet {
-				fmt.Printf("[INFO] 跳过符号链接：%s\n", path)
+				fmt.Printf("[INFO] Skipping symlink: %s\n", path)
 			}
 			continue
 		}
@@ -195,7 +195,7 @@ func (s *Scanner) processDir(dir string, push func(string)) error {
 		// 跳过空文件
 		if fileInfo.Size() == 0 {
 			if !s.quiet {
-				fmt.Printf("[INFO] 跳过空文件：%s\n", path)
+				fmt.Printf("[INFO] Skipping empty file: %s\n", path)
 			}
 			continue
 		}

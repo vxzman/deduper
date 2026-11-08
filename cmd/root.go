@@ -11,18 +11,18 @@ import (
 )
 
 var (
-	configPath = flag.String("config", "dedup.yaml", "配置文件路径")
-	helpFlag   = flag.Bool("help", false, "显示帮助")
+	configPath = flag.String("config", "dedup.yaml", "path to the configuration file")
+	helpFlag   = flag.Bool("help", false, "show help")
 )
 
-// Execute 是程序入口，返回退出码。
+// Execute is the program entry point; it returns the process exit code.
 func Execute() {
 	os.Exit(execute())
 }
 
 func execute() int {
-	// Go 标准库 flag 在遇到第一个非 flag 参数后会停止解析，
-	// 这里先重排参数，保证 `dedup scan --config x.yaml` 也能生效。
+	// The Go flag package stops parsing at the first non-flag argument,
+	// so reorder arguments first to allow `dedup scan --config x.yaml`.
 	flag.CommandLine.Parse(reorderArgs(os.Args[1:]))
 	args := flag.Args()
 
@@ -47,7 +47,7 @@ func execute() int {
 
 	store, err := cache.NewCacheManager(cfg.Database, cfg.Quiet)
 	if err != nil {
-		fmt.Printf("[ERROR] 打开数据库失败：%v\n", err)
+		fmt.Printf("[ERROR] Failed to open database: %v\n", err)
 		return 1
 	}
 	defer store.Close()
@@ -74,7 +74,7 @@ func execute() int {
 			return 1
 		}
 	default:
-		fmt.Printf("[ERROR] 未知命令：%s\n\n", args[0])
+		fmt.Printf("[ERROR] Unknown command: %s\n\n", args[0])
 		printHelp()
 		return 1
 	}
@@ -82,7 +82,8 @@ func execute() int {
 	return 0
 }
 
-// reorderArgs 将 flag 与位置参数重新排列，确保位于位置参数之后的 flag 也能被解析。
+// reorderArgs moves flags before positional arguments so that flags placed
+// after positional arguments are still parsed.
 func reorderArgs(args []string) []string {
 	valueFlags := map[string]bool{
 		"config": true,
@@ -121,20 +122,20 @@ func reorderArgs(args []string) []string {
 }
 
 func printHelp() {
-	fmt.Println(`dedup 声明式文件去重工具
+	fmt.Println(`dedup - declarative duplicate file finder
 
-用法:
-  dedup scan   [--config <file>]  扫描配置中的目录并保存重复文件结果
-  dedup list   [--config <file>]  列出已保存的重复文件
-  dedup delete [--config <file>]  交互式永久删除重复文件
-  dedup clear  [--config <file>]  清除哈希缓存与扫描结果
-  dedup --help                    显示帮助
+Usage:
+  dedup scan   [--config <file>]  Scan configured roots and save duplicate results
+  dedup list   [--config <file>]  List saved duplicate files
+  dedup delete [--config <file>]  Interactively delete duplicate files permanently
+  dedup clear  [--config <file>]  Clear the hash cache and scan results
+  dedup --help                    Show this help
 
-选项:
-  --config <file>   配置文件路径，默认 dedup.yaml，也可用 DEDUP_CONFIG 指定
-  --help            显示帮助
+Options:
+  --config <file>   Path to the configuration file (default: dedup.yaml, or DEDUP_CONFIG)
+  --help            Show this help
 
-配置文件示例 (YAML):
+Example configuration (YAML):
   database: /var/lib/dedup/dedup.db
   hash: blake3
   workers: 4
@@ -146,6 +147,6 @@ func printHelp() {
     - "*.tmp"
     - "@eaDir"
 
-定期扫描可交由 cron 或 systemd timer 执行:
+Periodic scans can be scheduled with cron or a systemd timer:
   dedup scan --config /etc/dedup/dedup.yaml`)
 }
